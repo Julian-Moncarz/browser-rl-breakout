@@ -1,0 +1,14 @@
+{
+  "name": "breakout-rl",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "train": "node train-cli.mjs",
+    "play": "node play.mjs",
+    "test": "node test-env.mjs"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.11.0",
+    "@tensorflow/tfjs-node": "^4.11.0"
+  }
+}

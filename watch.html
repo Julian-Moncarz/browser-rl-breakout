@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Breakout RL - Watch Model Play</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0a0a1a;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', sans-serif;
+            color: #eee;
+        }
+        h1 {
+            color: #00ffff;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.8);
+            margin-bottom: 10px;
+        }
+        #stats {
+            margin-bottom: 10px;
+            font-size: 14px;
+            font-family: monospace;
+            color: #00ffff;
+        }
+        canvas {
+            border: 2px solid #00ffff;
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.3);
+            border-radius: 4px;
+        }
+        #controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            background: #1a1a3a;
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+        button:hover:not(:disabled) {
+            background: #00ffff;
+            color: #0a0a1a;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #888;
+        }
+        .loading { color: #ffd700; }
+        .error { color: #ff6b6b; }
+        .success { color: #69db7c; }
+        label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #888;
+        }
+        input[type="range"] {
+            width: 80px;
+        }
+        #modelSelect {
+            background: #1a1a3a;
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            padding: 8px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Breakout RL - AI Player</h1>
+    <div id="stats">Score: 0 | Lives: 3 | Level: 1 | Episode Reward: 0</div>
+    <canvas id="game" width="800" height="600"></canvas>
+    <div id="controls">
+        <select id="modelSelect">
+            <option value="model">Latest Model</option>
+            <option value="model.best">Best Model</option>
+        </select>
+        <button id="loadBtn">Load Model</button>
+        <button id="playBtn" disabled>Play</button>
+        <button id="pauseBtn" disabled>Pause</button>
+        <button id="resetBtn" disabled>Reset</button>
+        <label>
+            Speed:
+            <input type="range" id="speed" min="1" max="10" value="5">
+            <span id="speedVal">5x</span>
+        </label>
+    </div>
+    <div id="status" class="loading">Select a model and click Load</div>
+
+    <script type="module">
+        import { createEnv } from '/env.js';
+
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const width = 800;
+        const height = 600;
+
+        // Colors
+        const brickColors = ['#ff0066', '#ff6600', '#ffcc00', '#00ff66', '#00ccff', '#cc00ff'];
+
+        // Game state
+        let env = null;
+        let episodeReward = 0;
+        let score = 0;
+        let particles = [];
+
+        // Model and control
+        let model = null;
+        let running = false;
+        let animationId = null;
+        let stepsPerFrame = 5;
+
+        function createParticles(x, y, color, count = 10) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x, y,
+                    dx: (Math.random() - 0.5) * 8,
+                    dy: (Math.random() - 0.5) * 8,
+                    radius: Math.random() * 4 + 2,
+                    color,
+                    life: 1
+                });
+            }
+        }
+
+        function updateParticles() {
+            particles = particles.filter(p => {
+                p.x += p.dx;
+                p.y += p.dy;
+                p.life -= 0.02;
+                p.radius *= 0.98;
+                return p.life > 0;
+            });
+        }
+
+        function selectAction(obs) {
+            return tf.tidy(() => {
+                const stateTensor = tf.tensor2d([obs]);
+                const qValues = model.predict(stateTensor);
+                return qValues.argMax(1).dataSync()[0];
+            });
+        }
+
+        function draw() {
+            const state = env.getState();
+            const { ball, paddle, lives, level } = state;
+
+            // Clear with trail effect
+            ctx.fillStyle = 'rgba(10, 10, 26, 0.3)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw bricks (approximate from env - simplified)
+            // Note: env.js doesn't expose bricks directly, so we skip detailed brick rendering
+            // In full implementation, could add getBricks() to env.js
+
+            // Draw paddle
+            ctx.fillStyle = '#00ffff';
+            ctx.shadowColor = '#00ffff';
+            ctx.shadowBlur = 15;
+            ctx.fillRect(paddle.x, paddle.y, paddle.width, paddle.height);
+            ctx.shadowBlur = 0;
+
+            // Draw ball
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.shadowColor = '#ffffff';
+            ctx.shadowBlur = 20;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Draw particles
+            particles.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            });
+
+            // Update stats
+            document.getElementById('stats').textContent =
+                `Score: ${score} | Lives: ${lives} | Level: ${level} | Episode Reward: ${episodeReward}`;
+        }
+
+        function gameLoop() {
+            if (!running) return;
+
+            for (let i = 0; i < stepsPerFrame; i++) {
+                const obs = env.getObs();
+                const action = selectAction(obs);
+                const result = env.step(action);
+
+                if (result.done) {
+                    env.reset();
+                    env.launch();
+                    episodeReward = 0;
+                    score = 0;
+                }
+
+                // Update display values
+                const state = env.getState();
+                score = state.score;
+                episodeReward += result.reward;
+
+                // Add particles on brick hits (simplified)
+                if (result.info.levelCleared) {
+                    createParticles(width / 2, height / 2, '#ffcc00', 20);
+                }
+            }
+
+            updateParticles();
+            draw();
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        // Load model
+        async function loadModel() {
+            const status = document.getElementById('status');
+            const modelDir = document.getElementById('modelSelect').value;
+            status.textContent = `Loading ${modelDir}...`;
+            status.className = 'loading';
+
+            try {
+                model = await tf.loadLayersModel(`/${modelDir}/model.json`);
+                status.textContent = `Loaded ${modelDir} successfully!`;
+                status.className = 'success';
+
+                // Enable controls
+                document.getElementById('playBtn').disabled = false;
+                document.getElementById('resetBtn').disabled = false;
+
+                // Initialize game
+                env = createEnv();
+                env.reset();
+                env.launch();
+                episodeReward = 0;
+                score = 0;
+                particles = [];
+                draw();
+            } catch (err) {
+                status.textContent = 'Failed to load model: ' + err.message;
+                status.className = 'error';
+            }
+        }
+
+        // Controls
+        document.getElementById('loadBtn').addEventListener('click', loadModel);
+
+        document.getElementById('playBtn').addEventListener('click', () => {
+            if (!running) {
+                running = true;
+                document.getElementById('playBtn').disabled = true;
+                document.getElementById('pauseBtn').disabled = false;
+                gameLoop();
+            }
+        });
+
+        document.getElementById('pauseBtn').addEventListener('click', () => {
+            running = false;
+            if (animationId) cancelAnimationFrame(animationId);
+            document.getElementById('playBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+        });
+
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            env.reset();
+            env.launch();
+            episodeReward = 0;
+            score = 0;
+            particles = [];
+            draw();
+        });
+
+        document.getElementById('speed').addEventListener('input', (e) => {
+            stepsPerFrame = parseInt(e.target.value);
+            document.getElementById('speedVal').textContent = stepsPerFrame + 'x';
+        });
+
+        // Check for model query param and auto-load
+        const urlParams = new URLSearchParams(window.location.search);
+        const modelParam = urlParams.get('model');
+        if (modelParam && ['model', 'model.best'].includes(modelParam)) {
+            document.getElementById('modelSelect').value = modelParam;
+            loadModel();
+        }
+
+        // Initialize env on load
+        env = createEnv();
+        env.reset();
+        draw();
+    </script>
+</body>
+</html>

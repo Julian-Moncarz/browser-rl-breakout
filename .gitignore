@@ -1,0 +1,9 @@
+node_modules/
+model/
+model.backup/
+model.best/
+train_output.txt
+train-log.csv
+.DS_Store
+*.log
+*.dylib
